@@ -11,6 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Using uvicorn to run the fastAPI app
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Using uvicorn to run the fastAPI app dynamically binding to PORT (required by Render/Cloud hosts), defaulting to 8000 locally
+CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 
