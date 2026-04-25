@@ -17,11 +17,15 @@ from app.db.db_init import init_db
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging()
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    os.makedirs(settings.VECTOR_DIR, exist_ok=True)
-    os.makedirs(os.path.dirname(settings.DB_PATH), exist_ok=True)
-    init_db()
-    warm_schema_cache(settings.DB_PATH)
+    try:
+        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+        os.makedirs(settings.VECTOR_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(settings.DB_PATH), exist_ok=True)
+        init_db()
+        warm_schema_cache(settings.DB_PATH)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Startup failure: {e}")
     yield
 
 
@@ -68,4 +72,6 @@ async def validation_exception_handler(request, exc: RequestValidationError):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)
