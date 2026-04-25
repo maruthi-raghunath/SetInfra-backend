@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 
 import duckdb
 
@@ -112,62 +111,26 @@ def clear_cached_schema(study_id: str) -> None:
 
 def warm_schema_cache(db_path: str) -> None:
     """Called once at startup to rebuild the in-memory schema cache from the
-    persisted DuckDB tables.  Any study that has at least one SDTM table
-    (sdtm_<study_id>_<domain>) will have its compressed schema regenerated
-    and stored in SCHEMA_CACHE so that subsequent query requests succeed
-    without requiring the user to reprocess the study."""
-    try:
-        con = duckdb.connect(db_path, read_only=True)
-        rows = con.execute(
-            """
-            SELECT DISTINCT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'main'
-              AND table_name LIKE 'sdtm_%'
-            ORDER BY table_name
-            """
-        ).fetchall()
-        con.close()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "warm_schema_cache: could not read DuckDB tables — skipping cache warm.",
-            extra={
-                "event_action": "schema_compression",
-                "model_version": "none",
-                "metadata": {"error": str(exc)},
-            },
-        )
-        return
-
-    # Extract unique study_ids from table names like sdtm_<study_id_segment>_<domain>
-    # The study_id segment is everything between the first and last underscore-delimited
-    # part after 'sdtm_'.  We cross-reference with the studies table to get true UUIDs.
-    study_ids: set[str] = set()
-    pattern = re.compile(r"^sdtm_([0-9a-f_\-]+?)_[a-z0-9]+$")
-    for (table_name,) in rows:
-        match = pattern.match(table_name)
-        if match:
-            # The study_id was normalised (hyphens → underscores).  We need to
-            # recover the original UUID from the studies table.
-            study_ids.add(match.group(1))
-
-    if not study_ids:
-        return
-
-    # Resolve normalised segments back to real study UUIDs via the studies table.
+    persisted DuckDB tables.  Reads all study UUIDs directly from the studies
+    table and uses list_study_tables to detect which ones have SDTM data,
+    then rebuilds the compressed schema for each."""
+    # Read all known study IDs from the studies table.
     try:
         con = duckdb.connect(db_path, read_only=True)
         all_study_ids = [row[0] for row in con.execute("SELECT id FROM studies").fetchall()]
         con.close()
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "warm_schema_cache: could not read studies table.",
+            "warm_schema_cache: could not read studies table — skipping cache warm.",
             extra={
                 "event_action": "schema_compression",
                 "model_version": "none",
                 "metadata": {"error": str(exc)},
             },
         )
+        return
+
+    if not all_study_ids:
         return
 
     warmed = 0

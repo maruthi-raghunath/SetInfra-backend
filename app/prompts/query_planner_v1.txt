@@ -4,7 +4,7 @@ Return JSON only with this exact shape:
 {{
   "target_tables": ["table_name"],
   "sql": "SELECT ...",
-  "chart_type": "table"
+  "chart_type": "bar"
 }}
 
 Rules:
@@ -16,8 +16,27 @@ Rules:
 - Keep the result set practical for analytics review.
 - Prefer explicit table names over aliases when possible.
 - If the user asks for a broad result set, keep it bounded.
-- If the request is best answered as a simple table, use "table" for chart_type.
-- Allowed chart_type values: table, bar, line, scatter.
+- If the user explicitly names a chart type, always use it.
+- Use "table" ONLY when the user explicitly asks for a table or the data has many columns that are best shown as raw rows.
+
+Allowed chart_type values and when to use them:
+- "bar"        → Comparisons, counts, event frequencies, group summaries. SQL: SELECT category, count.
+- "line"       → Trends over time or ordered sequences. SQL: SELECT date_or_visit, value.
+- "area"       → Cumulative trends or volume over time. SQL: SELECT date_or_visit, value.
+- "scatter"    → Correlation or distribution between two numeric variables. SQL: SELECT numeric1, numeric2.
+- "bubble"     → Three-variable scatter (x, y, size). SQL: SELECT x_col, y_col, size_col.
+- "pie"        → Proportional breakdown or share of a whole. SQL: SELECT category, count.
+- "histogram"  → Distribution of a single numeric variable. SQL: SELECT numeric_value.
+- "box"        → Statistical spread per group (min, median, max, outliers). SQL: SELECT group_col, value_col.
+- "heatmap"    → Intensity across two categorical axes. SQL: SELECT row_category, col_category, numeric_value.
+- "treemap"    → Hierarchical part-to-whole. SQL: SELECT category, numeric_value.
+- "funnel"     → Sequential stage drop-off (e.g. enrollment pipeline). SQL: SELECT stage_label, count.
+- "waterfall"  → Cumulative incremental changes. SQL: SELECT label, delta_value.
+- "spider"     → Multi-axis profile comparison (radar chart). SQL: SELECT attribute_label, score.
+- "timeline"   → Subject-level event timelines across dates (Gantt-style). SQL: SELECT subject_id, date.
+- "table"      → Raw tabular output. SQL: SELECT any columns.
+
+IMPORTANT: Choose chart_type to match the user's explicit request or the most insightful visualisation of the data.
 
 Compressed schema:
 {compressed_schema}
