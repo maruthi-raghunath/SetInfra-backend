@@ -14,10 +14,11 @@ from app.core.logging import configure_logging
 from app.db.db_init import init_db
 
 
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    configure_logging()
+async def run_startup_tasks():
+    """Run initialization in the background to ensure the port binds immediately."""
     try:
+        # Small delay to ensure uvicorn has bound the port
+        await asyncio.sleep(1)
         os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
         os.makedirs(settings.VECTOR_DIR, exist_ok=True)
         os.makedirs(os.path.dirname(settings.DB_PATH), exist_ok=True)
@@ -25,17 +26,25 @@ async def lifespan(_: FastAPI):
         warm_schema_cache(settings.DB_PATH)
     except Exception as e:
         import logging
-        logging.getLogger(__name__).error(f"Startup failure: {e}")
+        logging.getLogger(__name__).error(f"Background startup failure: {e}")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    configure_logging()
+    # Start initialization without blocking the main thread
+    startup_task = asyncio.create_task(run_startup_tasks())
     yield
+    startup_task.cancel()
 
 
 app = FastAPI(title="Setinfra API", lifespan=lifespan)
 
-# Add CORS Middleware to allow requests from the React frontend running on port 3000
+# Add CORS Middleware - Simplified for maximum compatibility in prototype
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # For prototype, allow all
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -74,4 +83,4 @@ if __name__ == "__main__":
     import uvicorn
     import os
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)

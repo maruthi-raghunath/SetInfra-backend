@@ -8,7 +8,7 @@ import numpy as np
 import PyPDF2
 from docx import Document
 from openpyxl import load_workbook
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 import xlrd
 
 from app.core.config import settings
@@ -19,9 +19,10 @@ _model: SentenceTransformer | None = None
 CHUNKS_SUFFIX = ".chunks.json"
 
 
-def _get_model() -> SentenceTransformer:
+def _get_model() -> "SentenceTransformer":
     global _model
     if _model is None:
+        from sentence_transformers import SentenceTransformer
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
