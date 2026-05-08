@@ -1,12 +1,9 @@
 import json
 import logging
-
-import duckdb
-
+import os
 from app.core.study_utils import list_study_tables
 from app.core.config import settings
-
-import os
+from app.db.session import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +20,15 @@ def get_original_tokens(study_id: str, db_path: str = settings.DB_PATH) -> int:
         return ORIGINAL_TOKENS_CACHE[study_id]
         
     try:
-        con = duckdb.connect(db_path)
+        con = get_db()
         # First, try to load from DB
         row = con.execute("SELECT original_tokens FROM studies WHERE id = ?", (study_id,)).fetchone()
         if row and row[0] is not None:
-            con.close()
             ORIGINAL_TOKENS_CACHE[study_id] = row[0]
             return row[0]
 
         # Fallback: compute it
         paths = con.execute("SELECT storage_path FROM files WHERE study_id = ? AND file_type = 'SDTM_CSV'", (study_id,)).fetchall()
-        con.close()
         
         total = 0
         for (path,) in paths:
@@ -42,9 +37,7 @@ def get_original_tokens(study_id: str, db_path: str = settings.DB_PATH) -> int:
                 
         # Persist to DB
         try:
-            con = duckdb.connect(db_path)
             con.execute("UPDATE studies SET original_tokens = ? WHERE id = ?", (total, study_id))
-            con.close()
         except Exception as e:
             logger.warning(f"Failed to persist original tokens for {study_id} to DB: {e}")
 
@@ -57,12 +50,11 @@ def get_original_tokens(study_id: str, db_path: str = settings.DB_PATH) -> int:
 def _extract_valid_values_from_schema(study_id: str, db_path: str) -> dict[str, dict[str, str]]:
     try:
         from openpyxl import load_workbook
-        con = duckdb.connect(db_path)
+        con = get_db()
         schema_file = con.execute(
             "SELECT storage_path FROM files WHERE file_type = 'Schema_JSON' AND study_id = ? ORDER BY created_at DESC",
             (study_id,)
         ).fetchone()
-        con.close()
 
         if not schema_file:
             return {}
@@ -125,7 +117,7 @@ def compress_schema(
     db_path: str,
     created_tables: list[str] | None = None,
 ) -> dict:
-    con = duckdb.connect(db_path)
+    con = get_db()
     table_names = created_tables or list_study_tables(con, study_id)
 
     study_schema = {"study_id": study_id, "tables": {}}
@@ -174,13 +166,9 @@ def compress_schema(
             count_tokens(json.dumps(study_schema))
         )
 
-    con.close()
-
     # Persist to DB
     try:
-        con = duckdb.connect(db_path)
         con.execute("UPDATE studies SET compressed_schema = ? WHERE id = ?", (json.dumps(study_schema), study_id))
-        con.close()
     except Exception as e:
         logger.warning(f"Failed to persist compressed schema for {study_id} to DB: {e}")
 
@@ -207,9 +195,8 @@ def get_cached_schema(study_id: str, db_path: str = settings.DB_PATH) -> dict | 
         
     # Lazy load from DB
     try:
-        con = duckdb.connect(db_path)
+        con = get_db()
         row = con.execute("SELECT compressed_schema FROM studies WHERE id = ?", (study_id,)).fetchone()
-        con.close()
         if row and row[0]:
             schema = json.loads(row[0]) if isinstance(row[0], str) else row[0]
             SCHEMA_CACHE[study_id] = schema
@@ -223,20 +210,17 @@ def get_cached_schema(study_id: str, db_path: str = settings.DB_PATH) -> dict | 
 def clear_cached_schema(study_id: str, db_path: str = settings.DB_PATH) -> None:
     SCHEMA_CACHE.pop(study_id, None)
     try:
-        con = duckdb.connect(db_path)
+        con = get_db()
         con.execute("UPDATE studies SET compressed_schema = NULL WHERE id = ?", (study_id,))
-        con.close()
     except Exception as e:
         logger.warning(f"Failed to clear schema from DB for {study_id}: {e}")
 
 
 def warm_schema_cache(db_path: str) -> None:
-    """Called once at startup to populate the fast in-memory cache directly from DuckDB 
-    instead of rebuilding the schema, enabling instant startup times."""
+    """Called once at startup."""
     try:
-        con = duckdb.connect(db_path)
+        con = get_db()
         rows = con.execute("SELECT id, compressed_schema, original_tokens FROM studies").fetchall()
-        con.close()
         
         warmed = 0
         for study_id, schema_str, original_tokens in rows:
@@ -247,20 +231,6 @@ def warm_schema_cache(db_path: str) -> None:
             if original_tokens is not None:
                 ORIGINAL_TOKENS_CACHE[study_id] = original_tokens
                 
-        logger.info(
-            "Schema cache loaded from persistent DB on startup.",
-            extra={
-                "event_action": "schema_compression",
-                "model_version": "none",
-                "metadata": {"studies_warmed": warmed},
-            },
-        )
+        logger.info(f"Schema cache loaded from persistent DB on startup. Studies warmed: {warmed}")
     except Exception as exc:
-        logger.warning(
-            "warm_schema_cache: could not load studies from DB.",
-            extra={
-                "event_action": "schema_compression",
-                "model_version": "none",
-                "metadata": {"error": str(exc)},
-            },
-        )
+        logger.warning(f"warm_schema_cache: could not load studies from DB: {exc}")

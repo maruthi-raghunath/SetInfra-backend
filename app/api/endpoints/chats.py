@@ -4,24 +4,22 @@ from fastapi import APIRouter, Depends
 from app.core.auth import get_current_user
 from app.core.config import settings
 from app.core.errors import api_error
+from app.db.session import get_db
 
 router = APIRouter()
 
 
 def _assert_chat_access(chat_id: str, current_user: str) -> tuple[str, str]:
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        row = con.execute(
-            """
-            SELECT chats.id, chats.study_id, studies.user_id
-            FROM chats
-            JOIN studies ON chats.study_id = studies.id
-            WHERE chats.id = ?
-            """,
-            (chat_id,),
-        ).fetchone()
-    finally:
-        con.close()
+    con = get_db()
+    row = con.execute(
+        """
+        SELECT chats.id, chats.study_id, studies.user_id
+        FROM chats
+        JOIN studies ON chats.study_id = studies.id
+        WHERE chats.id = ?
+        """,
+        (chat_id,),
+    ).fetchone()
 
     if row is None:
         raise api_error(404, "CHAT_NOT_FOUND", "Chat not found.")
@@ -41,30 +39,27 @@ def list_chats(
     safe_limit = max(1, min(limit, 100))
     offset = (safe_page - 1) * safe_limit
 
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        owner = con.execute("SELECT user_id FROM studies WHERE id = ?", (study_id,)).fetchone()
-        if owner is None:
-            raise api_error(404, "STUDY_NOT_FOUND", "Study not found.")
-        if owner[0] != current_user:
-            raise api_error(403, "FORBIDDEN", "You do not have access to this study.")
+    con = get_db()
+    owner = con.execute("SELECT user_id FROM studies WHERE id = ?", (study_id,)).fetchone()
+    if owner is None:
+        raise api_error(404, "STUDY_NOT_FOUND", "Study not found.")
+    if owner[0] != current_user:
+        raise api_error(403, "FORBIDDEN", "You do not have access to this study.")
 
-        total_items = con.execute(
-            "SELECT COUNT(*) FROM chats WHERE study_id = ?",
-            (study_id,),
-        ).fetchone()[0]
-        rows = con.execute(
-            """
-            SELECT id, chat_title, created_at
-            FROM chats
-            WHERE study_id = ?
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-            """,
-            (study_id, safe_limit, offset),
-        ).fetchall()
-    finally:
-        con.close()
+    total_items = con.execute(
+        "SELECT COUNT(*) FROM chats WHERE study_id = ?",
+        (study_id,),
+    ).fetchone()[0]
+    rows = con.execute(
+        """
+        SELECT id, chat_title, created_at
+        FROM chats
+        WHERE study_id = ?
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+        """,
+        (study_id, safe_limit, offset),
+    ).fetchall()
 
     return {
         "data": [
@@ -88,19 +83,16 @@ def list_chats(
 def get_chat_messages(chat_id: str, current_user: str = Depends(get_current_user)):
     """Return all messages for a chat in chronological order."""
     _assert_chat_access(chat_id, current_user)
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        rows = con.execute(
-            """
-            SELECT id, message_body, metrics_json, created_at
-            FROM chat_messages
-            WHERE chat_id = ?
-            ORDER BY created_at ASC
-            """,
-            (chat_id,),
-        ).fetchall()
-    finally:
-        con.close()
+    con = get_db()
+    rows = con.execute(
+        """
+        SELECT id, message_body, metrics_json, created_at
+        FROM chat_messages
+        WHERE chat_id = ?
+        ORDER BY created_at ASC
+        """,
+        (chat_id,),
+    ).fetchall()
 
     import json as _json
     messages = []
@@ -127,10 +119,7 @@ def get_chat_messages(chat_id: str, current_user: str = Depends(get_current_user
 @router.delete("/{chat_id}")
 def delete_chat(chat_id: str, current_user: str = Depends(get_current_user)):
     _, _study_id = _assert_chat_access(chat_id, current_user)
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        con.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
-        con.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
-    finally:
-        con.close()
+    con = get_db()
+    con.execute("DELETE FROM chat_messages WHERE chat_id = ?", (chat_id,))
+    con.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
     return {"status": "deleted"}

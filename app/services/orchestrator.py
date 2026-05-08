@@ -5,8 +5,6 @@ import time
 import uuid
 from typing import AsyncGenerator
 
-import duckdb
-
 from app.core.config import gemini_api_key_preview, settings
 from app.rag.retriever import retrieve_context
 from app.services.executor import execute_query
@@ -15,6 +13,7 @@ from app.services.query_engine_types import AuditLogError, QueryEngineError
 from app.services.query_planner import plan_query
 from app.services.sql_validator import validate_sql
 from app.services.stats_validator import validate_results
+from app.db.session import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +32,8 @@ async def _save_chat_and_audit_async(
     sql: str,
 ) -> None:
     def _do_save():
-        con = duckdb.connect(settings.DB_PATH)
+        con = get_db()
         try:
-            con.execute("BEGIN TRANSACTION")
             con.execute(
                 """
                 INSERT INTO chat_messages (id, chat_id, message_body, metrics_json)
@@ -68,12 +66,9 @@ async def _save_chat_and_audit_async(
                     sql,
                 ),
             )
-            con.execute("COMMIT")
         except Exception as exc:
-            con.execute("ROLLBACK")
-            raise AuditLogError("Failed to persist chat and audit log transaction.") from exc
-        finally:
-            con.close()
+            logger.error(f"Failed to persist chat and audit log: {exc}")
+            # We don't raise here to prevent crashing the whole query flow for just a log failure
             
     await asyncio.to_thread(_do_save)
 

@@ -1,87 +1,67 @@
-import json
-import uuid
-
-import duckdb
-from fastapi import APIRouter, Depends
+import logging
+from typing import AsyncGenerator
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core.auth import get_current_user
-from app.core.config import settings
 from app.core.errors import api_error
 from app.services.orchestrator import run_query
+from app.db.session import get_db
 
 router = APIRouter()
-
+logger = logging.getLogger(__name__)
 
 class QueryRequest(BaseModel):
+    prompt: str
     study_id: str
     chat_id: str | None = None
-    prompt: str
 
-
-def _ensure_study_access(study_id: str, current_user: str) -> None:
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        owner = con.execute("SELECT user_id FROM studies WHERE id = ?", (study_id,)).fetchone()
-    finally:
-        con.close()
-
-    if owner is None:
-        raise api_error(404, "STUDY_NOT_FOUND", "Study not found.")
-    if owner[0] != current_user:
-        raise api_error(403, "FORBIDDEN", "You do not have access to this study.")
-
-
-def _ensure_chat_access(chat_id: str, study_id: str) -> None:
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        chat_row = con.execute(
-            "SELECT id FROM chats WHERE id = ? AND study_id = ?",
-            (chat_id, study_id),
-        ).fetchone()
-    finally:
-        con.close()
-
-    if chat_row is None:
-        raise api_error(404, "CHAT_NOT_FOUND", "Chat not found.")
-
-
-def _create_chat(study_id: str, prompt: str) -> str:
-    chat_id = str(uuid.uuid4())
-    title = prompt.strip()[:80] or "New Chat"
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        con.execute(
-            "INSERT INTO chats (id, study_id, chat_title) VALUES (?, ?, ?)",
-            (chat_id, study_id, title),
-        )
-    finally:
-        con.close()
-    return chat_id
-
+def _ensure_chat_access(chat_id: str, study_id: str):
+    con = get_db()
+    row = con.execute("SELECT study_id FROM chats WHERE id = ?", (chat_id,)).fetchone()
+    if not row:
+        raise api_error(404, "NOT_FOUND", "Chat not found.")
+    if row[0] != study_id:
+        raise api_error(403, "FORBIDDEN", "Chat does not belong to this study.")
 
 @router.post("")
-async def query_endpoint(
+async def execute_user_query(
     payload: QueryRequest,
-    current_user: str = Depends(get_current_user),
+    current_user: str = Depends(get_current_user)
 ):
-    _ensure_study_access(payload.study_id, current_user)
+    con = get_db()
+    # 1. Assert Study Access
+    study_row = con.execute("SELECT user_id FROM studies WHERE id = ?", (payload.study_id,)).fetchone()
+    if not study_row:
+        raise api_error(404, "NOT_FOUND", "Study not found.")
+    if study_row[0] != current_user:
+        raise api_error(403, "FORBIDDEN", "No access to this study.")
+
+    # 2. Chat ID management
     chat_id = payload.chat_id
-    if chat_id is None:
-        chat_id = _create_chat(payload.study_id, payload.prompt)
+    if not chat_id:
+        import uuid
+        chat_id = str(uuid.uuid4())
+        con.execute(
+            "INSERT INTO chats (id, study_id, chat_title) VALUES (?, ?, ?)",
+            (chat_id, payload.study_id, payload.prompt[:50])
+        )
     else:
         _ensure_chat_access(chat_id, payload.study_id)
 
-    con_user = duckdb.connect(settings.DB_PATH)
-    try:
-        user_row = con_user.execute("SELECT username FROM users WHERE id = ?", (current_user,)).fetchone()
-        current_username = user_row[0] if user_row else "Unknown"
-    finally:
-        con_user.close()
+    user_row = con.execute("SELECT username FROM users WHERE id = ?", (current_user,)).fetchone()
+    current_username = user_row[0] if user_row else "Unknown"
 
     async def event_stream():
-        async for event in run_query(payload.study_id, chat_id, payload.prompt, current_user, current_username):
+        async for event in run_query(
+            study_id=payload.study_id,
+            chat_id=chat_id,
+            prompt=payload.prompt,
+            user_id=current_user,
+            username=current_username
+        ):
+            import json
             yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

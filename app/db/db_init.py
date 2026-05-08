@@ -103,4 +103,6 @@ def init_db() -> None:
         )
         """
     )
+    studies_count = con.execute("SELECT COUNT(*) FROM studies").fetchone()[0]
+    logger.info(f"Database initialized. Current study count: {studies_count}")
     con.close()

@@ -14,6 +14,8 @@ from app.core.logging import configure_logging
 from app.db.db_init import init_db
 
 
+from app.db.session import DatabaseSession
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging()
@@ -25,7 +27,10 @@ async def lifespan(_: FastAPI):
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"Startup error: {e}")
+    
     yield
+    
+    DatabaseSession.close_connection()
 
 
 app = FastAPI(title="Setinfra API", lifespan=lifespan)
