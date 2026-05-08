@@ -3,26 +3,16 @@ import logging
 import gc
 from pathlib import Path
 
-import faiss
-import numpy as np
-
-from app.core.compression import count_tokens
-from app.core.config import settings
-from app.db.session import get_db
-from app.services.faiss_service import (
-    chunk_text,
-    extract_text_from_file,
-    get_chunks_path,
-    get_embeddings,
-    get_index_path,
-)
+# Heavy imports (faiss) are moved inside the function to save RAM.
 
 logger = logging.getLogger(__name__)
 MAX_CONTEXT_TOKENS = 6000
 TOP_K = 100
 
-
 def _rebuild_chunk_metadata(study_id: str, chunks_path: Path) -> list[str]:
+    from app.db.session import get_db
+    from app.services.faiss_service import chunk_text, extract_text_from_file
+    
     con = get_db()
     rows = con.execute(
         """
@@ -44,11 +34,16 @@ def _rebuild_chunk_metadata(study_id: str, chunks_path: Path) -> list[str]:
 
     return rebuilt_chunks
 
-
 def retrieve_context(study_id: str, query_text: str) -> str:
+    import faiss
+    from app.core.compression import count_tokens
+    from app.services.faiss_service import get_chunks_path, get_embeddings, get_index_path
+    
     index_path = Path(get_index_path(study_id))
     chunks_path = Path(get_chunks_path(study_id))
+    
     if not index_path.exists():
+        logger.warning(f"RAG index not found for study {study_id} at {index_path}. It may have been wiped by a server restart.")
         return ""
 
     if chunks_path.exists():
@@ -66,17 +61,16 @@ def retrieve_context(study_id: str, query_text: str) -> str:
         index = faiss.read_index(str(index_path))
         
         logger.info("Fetching embedding for query...")
-        # Use unified get_embeddings for query as well
         normalized_embedding = get_embeddings([query_text])
         
         logger.info(f"Searching index for top {TOP_K} chunks...")
         _, indices = index.search(normalized_embedding, min(TOP_K, len(chunks)))
         logger.info("Search complete.")
 
-        # Re-ranking heuristic for clinical opposites (Inclusion vs Exclusion)
         query_lower = query_text.lower()
         indices_list = list(indices[0])
         
+        # Clinical relevance re-ranking
         if "inclusion" in query_lower or "exclusion" in query_lower:
             primary = "inclusion" if "inclusion" in query_lower else "exclusion"
             secondary = "exclusion" if "inclusion" in query_lower else "inclusion"
@@ -89,7 +83,6 @@ def retrieve_context(study_id: str, query_text: str) -> str:
                 if primary in txt and secondary not in txt: score += 3
                 elif primary in txt: score += 2
                 elif secondary in txt: score += 1
-                if "[sheet:" in txt: score -= 2
                 return score
                 
             indices_list.sort(key=rank_score, reverse=True)
@@ -108,7 +101,6 @@ def retrieve_context(study_id: str, query_text: str) -> str:
         
         # Cleanup
         del index
-        del chunks
         gc.collect()
         
         return context

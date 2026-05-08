@@ -4,39 +4,27 @@ import os
 import gc
 from typing import Any
 
-import faiss
-import numpy as np
-import PyPDF2
-from docx import Document
-from openpyxl import load_workbook
-import xlrd
-from google import genai
-
-from app.core.config import settings
+# We move heavy imports (faiss, PyPDF2, etc.) inside functions to save RAM on startup.
 
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
-# Use settings.USE_LOCAL_EMBEDDING to toggle between local and remote embeddings.
-
-_local_model: Any = None
-
-def _get_local_model() -> Any:
-    global _local_model
-    if _local_model is None:
-        from sentence_transformers import SentenceTransformer
-        _local_model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _local_model
-
 def _get_gemini_client():
+    from google import genai
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
-def get_embeddings(texts: list[str]) -> np.ndarray:
+def get_embeddings(texts: list[str]) -> Any:
     """Wrapper that chooses between local and remote embeddings based on settings."""
+    from app.core.config import settings
+    import numpy as np
+
     if settings.USE_LOCAL_EMBEDDING:
         logger.info(f"Computing local embeddings for {len(texts)} chunks...")
-        model = _get_local_model()
+        from sentence_transformers import SentenceTransformer
+        model = SentenceTransformer("all-MiniLM-L6-v2")
         embeddings = model.encode(texts, convert_to_numpy=True)
+        # Clean up model immediately
+        del model
+        gc.collect()
         return np.array(embeddings, dtype=np.float32)
     else:
         logger.info(f"Fetching remote Gemini embeddings for {len(texts)} chunks...")
@@ -53,27 +41,33 @@ def get_embeddings(texts: list[str]) -> np.ndarray:
             logger.error(f"Gemini Remote Embedding failed: {e}")
             raise
 
-# --- Helper functions ---
-
 def get_index_path(study_id: str) -> str:
+    from app.core.config import settings
     return os.path.join(settings.VECTOR_DIR, f"{study_id}.index")
 
 def get_chunks_path(study_id: str) -> str:
+    from app.core.config import settings
     return os.path.join(settings.VECTOR_DIR, f"{study_id}.chunks.json")
 
 def extract_text_from_file(file_path: str, file_type: str) -> str:
     if file_type == "Protocol":
         if file_path.lower().endswith(".pdf"):
+            import PyPDF2
             text_parts: list[str] = []
-            with open(file_path, "rb") as file_handle:
-                reader = PyPDF2.PdfReader(file_handle)
-                for page in reader.pages:
-                    extracted = page.extract_text()
-                    if extracted:
-                        text_parts.append(extracted)
-            return "\n".join(text_parts)
+            try:
+                with open(file_path, "rb") as file_handle:
+                    reader = PyPDF2.PdfReader(file_handle)
+                    for page in reader.pages:
+                        extracted = page.extract_text()
+                        if extracted:
+                            text_parts.append(extracted)
+                return "\n".join(text_parts)
+            except Exception as e:
+                logger.error(f"PDF extraction failed: {e}")
+                return ""
 
         if file_path.lower().endswith(".docx"):
+            from docx import Document
             document = Document(file_path)
             return "\n".join(
                 paragraph.text for paragraph in document.paragraphs if paragraph.text
@@ -87,6 +81,7 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
                 return "\n".join(",".join(cell for cell in row) for row in reader)
 
         if file_path.lower().endswith(".xlsx"):
+            from openpyxl import load_workbook
             workbook = load_workbook(file_path, read_only=True, data_only=True)
             sheet_text: list[str] = []
             for worksheet in workbook.worksheets:
@@ -112,9 +107,10 @@ def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str]
             chunks.append(chunk)
     return chunks
 
-# --- Core logic ---
-
 def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]]) -> str | None:
+    import faiss
+    from app.core.config import settings
+    
     all_chunks: list[str] = []
     index = None
     batch_size = 50
@@ -156,12 +152,9 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
     with open(chunks_path, "w", encoding="utf-8") as f:
         json.dump({"study_id": study_id, "chunks": all_chunks}, f)
 
-    if settings.USE_LOCAL_EMBEDDING:
-        # Clear model after heavy indexing to save RAM
-        global _local_model
-        del _local_model
-        _local_model = None
-        gc.collect()
+    # Cleanup
+    del index
+    gc.collect()
 
     logger.info(f"Index saved with {len(all_chunks)} chunks.")
     return index_path
