@@ -62,10 +62,16 @@ def retrieve_context(study_id: str, query_text: str) -> str:
         return ""
 
     try:
+        logger.info(f"Reading FAISS index from {index_path}...")
         index = faiss.read_index(str(index_path))
+        
+        logger.info("Fetching embedding for query...")
         # Use unified get_embeddings for query as well
         normalized_embedding = get_embeddings([query_text])
+        
+        logger.info(f"Searching index for top {TOP_K} chunks...")
         _, indices = index.search(normalized_embedding, min(TOP_K, len(chunks)))
+        logger.info("Search complete.")
 
         # Re-ranking heuristic for clinical opposites (Inclusion vs Exclusion)
         query_lower = query_text.lower()
