@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -22,7 +23,7 @@ def _event(name: str, payload: dict) -> dict:
     return {"event": name, "payload": payload}
 
 
-def _save_chat_and_audit(
+async def _save_chat_and_audit_async(
     *,
     chat_id: str,
     study_id: str,
@@ -31,47 +32,50 @@ def _save_chat_and_audit(
     metrics: dict,
     sql: str,
 ) -> None:
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        con.execute("BEGIN TRANSACTION")
-        con.execute(
-            """
-            INSERT INTO chat_messages (id, chat_id, message_body, metrics_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (str(uuid.uuid4()), chat_id, prompt, None),
-        )
-        con.execute(
-            """
-            INSERT INTO chat_messages (id, chat_id, message_body, metrics_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                chat_id,
-                assistant_message,
-                json.dumps(metrics, default=str),
-            ),
-        )
-        con.execute(
-            """
-            INSERT INTO audit_logs (id, study_id, event_type, prompt_trace, sql_executed)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                study_id,
-                "Query_Execution",
-                prompt,
-                sql,
-            ),
-        )
-        con.execute("COMMIT")
-    except Exception as exc:
-        con.execute("ROLLBACK")
-        raise AuditLogError("Failed to persist chat and audit log transaction.") from exc
-    finally:
-        con.close()
+    def _do_save():
+        con = duckdb.connect(settings.DB_PATH)
+        try:
+            con.execute("BEGIN TRANSACTION")
+            con.execute(
+                """
+                INSERT INTO chat_messages (id, chat_id, message_body, metrics_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (str(uuid.uuid4()), chat_id, prompt, None),
+            )
+            con.execute(
+                """
+                INSERT INTO chat_messages (id, chat_id, message_body, metrics_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    chat_id,
+                    assistant_message,
+                    json.dumps(metrics, default=str),
+                ),
+            )
+            con.execute(
+                """
+                INSERT INTO audit_logs (id, study_id, event_type, prompt_trace, sql_executed)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    study_id,
+                    "Query_Execution",
+                    prompt,
+                    sql,
+                ),
+            )
+            con.execute("COMMIT")
+        except Exception as exc:
+            con.execute("ROLLBACK")
+            raise AuditLogError("Failed to persist chat and audit log transaction.") from exc
+        finally:
+            con.close()
+            
+    await asyncio.to_thread(_do_save)
 
 
 async def run_query(study_id: str, chat_id: str, prompt: str, user_id: str, username: str) -> AsyncGenerator[dict, None]:
@@ -89,21 +93,21 @@ async def run_query(study_id: str, chat_id: str, prompt: str, user_id: str, user
     try:
         yield _event("thinking", {"stage": "rag", "chat_id": chat_id})
         rag_start = time.perf_counter()
-        rag_context = retrieve_context(study_id, prompt)
+        rag_context = await asyncio.to_thread(retrieve_context, study_id, prompt)
         rag_ms = int((time.perf_counter() - rag_start) * 1000)
         metrics["rag_ms"] = rag_ms
 
         yield _event("thinking", {"stage": "planning", "chat_id": chat_id})
-        plan_result = plan_query(study_id, prompt, rag_context)
+        plan_result = await asyncio.to_thread(plan_query, study_id, prompt, rag_context)
         metrics["planner_llm_ms"] = plan_result.llm_ms
         metrics["prompt_tokens_estimate"] = plan_result.prompt_tokens_estimate
         metrics["rag_context_present"] = bool(rag_context)
 
         executed_sql = plan_result.plan["sql"]
-        validate_sql(executed_sql, study_id)
+        await asyncio.to_thread(validate_sql, executed_sql, study_id)
         yield _event("sql_ready", {"sql": executed_sql, "chat_id": chat_id})
 
-        execution_result = execute_query(executed_sql)
+        execution_result = await asyncio.to_thread(execute_query, executed_sql)
         metrics["duckdb_exec_ms"] = execution_result.duckdb_exec_ms
         yield _event(
             "data_ready",
@@ -114,7 +118,7 @@ async def run_query(study_id: str, chat_id: str, prompt: str, user_id: str, user
             },
         )
 
-        stats_result = validate_results(execution_result.rows)
+        stats_result = await asyncio.to_thread(validate_results, execution_result.rows)
         metrics["stats_skipped"] = stats_result["skipped"]
         metrics["row_count"] = stats_result["row_count"]
 
@@ -141,7 +145,7 @@ async def run_query(study_id: str, chat_id: str, prompt: str, user_id: str, user
             assistant_message = "No explanation generated."
 
         from app.core.compression import get_original_tokens
-        original_tokens = get_original_tokens(study_id, settings.DB_PATH)
+        original_tokens = await asyncio.to_thread(get_original_tokens, study_id, settings.DB_PATH)
         actual_tokens = plan_result.prompt_tokens_estimate
         savings_percentage = 0.0
         if original_tokens > 0:
@@ -170,7 +174,7 @@ async def run_query(study_id: str, chat_id: str, prompt: str, user_id: str, user
             "prompt_name": prompt,
         }
 
-        _save_chat_and_audit(
+        await _save_chat_and_audit_async(
             chat_id=chat_id,
             study_id=study_id,
             prompt=prompt,

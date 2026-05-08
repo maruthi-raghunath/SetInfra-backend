@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 import duckdb
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile, BackgroundTasks
 
 from app.core.auth import get_current_user
 from app.core.compression import clear_cached_schema, compress_schema
@@ -148,12 +148,10 @@ def list_files(
         },
     }
 
-@router.post("/process/{study_id}")
-def process_study_files(study_id: str, current_user: str = Depends(get_current_user)):
+def _internal_process_files(study_id: str):
+    """Heavy lifting for file processing, meant to be run in a background task."""
     con = duckdb.connect(settings.DB_PATH)
     try:
-        _assert_study_access(con, study_id, current_user)
-
         # Get ALL files for this study to ensure complete indexing/schema
         all_files = con.execute(
             """
@@ -166,12 +164,11 @@ def process_study_files(study_id: str, current_user: str = Depends(get_current_u
         ).fetchall()
 
         if not all_files:
-            return {"status": "No files found", "tables_created": []}
+            return
 
         con.execute("UPDATE studies SET status = 'Processing' WHERE id = ?", (study_id,))
 
         documents_to_embed = []
-        tables_created = []
         processed_file_ids: list[str] = []
 
         for file_id, file_type, storage_path, file_name, is_processed in all_files:
@@ -188,44 +185,42 @@ def process_study_files(study_id: str, current_user: str = Depends(get_current_u
                 con.execute(
                     f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{safe_path}')"
                 )
-                tables_created.append(table_name)
             
             if not is_processed:
                 processed_file_ids.append(file_id)
 
+        # Rebuild the full vector index for this study (Heavy Task)
+        if documents_to_embed:
+            index_documents(study_id, documents_to_embed)
+
+        # Rebuild the compressed schema cache (Heavy Task)
+        compress_schema(study_id, settings.DB_PATH)
+
+        # Mark files as processed
+        for f_id in processed_file_ids:
+            con.execute("UPDATE files SET is_processed = true WHERE id = ?", (f_id,))
+        con.execute("UPDATE studies SET status = 'Active' WHERE id = ?", (study_id,))
+
+    except Exception as exc:
+        logger.error(f"Background processing failed for study {study_id}: {exc}")
     finally:
         con.close()
 
-    # Rebuild the full vector index for this study
-    index_documents(study_id, documents_to_embed)
 
-    # Rebuild the compressed schema cache
-    # We pass None to creations to force list_study_tables to find ALL existing tables
-    compress_schema(study_id, settings.DB_PATH)
-
-    # Mark files as processed in a new connection
+@router.post("/process/{study_id}")
+async def process_study_files(
+    study_id: str, 
+    background_tasks: BackgroundTasks,
+    current_user: str = Depends(get_current_user)
+):
     con = duckdb.connect(settings.DB_PATH)
     try:
-        for file_id in processed_file_ids:
-            con.execute("UPDATE files SET is_processed = true WHERE id = ?", (file_id,))
-        con.execute("UPDATE studies SET status = 'Active' WHERE id = ?", (study_id,))
+        _assert_study_access(con, study_id, current_user)
     finally:
         con.close()
 
-    logger.info(
-        "Study files processed/re-indexed.",
-        extra={
-            "event_action": "db_execution",
-            "model_version": "none",
-            "metadata": {
-                "study_id": study_id,
-                "new_tables": tables_created,
-                "documents_indexed": len(documents_to_embed),
-                "newly_processed_files": len(processed_file_ids),
-            },
-        },
-    )
-    return {"status": "Processed", "tables_created": tables_created}
+    background_tasks.add_task(_internal_process_files, study_id)
+    return {"message": "Processing started in background."}
 
 
 @router.delete("/{file_id}")

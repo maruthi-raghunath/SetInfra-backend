@@ -73,7 +73,7 @@ async def query_endpoint(
     else:
         _ensure_chat_access(chat_id, payload.study_id)
 
-    con_user = duckdb.connect(settings.DB_PATH, read_only=True)
+    con_user = duckdb.connect(settings.DB_PATH)
     try:
         user_row = con_user.execute("SELECT username FROM users WHERE id = ?", (current_user,)).fetchone()
         current_username = user_row[0] if user_row else "Unknown"

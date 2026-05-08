@@ -125,7 +125,7 @@ def compress_schema(
     db_path: str,
     created_tables: list[str] | None = None,
 ) -> dict:
-    con = duckdb.connect(db_path, read_only=True)
+    con = duckdb.connect(db_path)
     table_names = created_tables or list_study_tables(con, study_id)
 
     study_schema = {"study_id": study_id, "tables": {}}
@@ -207,7 +207,7 @@ def get_cached_schema(study_id: str, db_path: str = settings.DB_PATH) -> dict | 
         
     # Lazy load from DB
     try:
-        con = duckdb.connect(db_path, read_only=True)
+        con = duckdb.connect(db_path)
         row = con.execute("SELECT compressed_schema FROM studies WHERE id = ?", (study_id,)).fetchone()
         con.close()
         if row and row[0]:
@@ -234,7 +234,7 @@ def warm_schema_cache(db_path: str) -> None:
     """Called once at startup to populate the fast in-memory cache directly from DuckDB 
     instead of rebuilding the schema, enabling instant startup times."""
     try:
-        con = duckdb.connect(db_path, read_only=True)
+        con = duckdb.connect(db_path)
         rows = con.execute("SELECT id, compressed_schema, original_tokens FROM studies").fetchall()
         con.close()
         

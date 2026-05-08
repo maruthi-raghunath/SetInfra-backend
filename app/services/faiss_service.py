@@ -110,11 +110,34 @@ def chunk_text(text: str, chunk_size: int = 200, overlap: int = 30) -> list[str]
 
 def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]]) -> str | None:
     all_chunks: list[str] = []
-    for file_path, file_type in file_paths_with_types:
-        extracted_text = extract_text_from_file(file_path, file_type)
-        all_chunks.extend(chunk_text(extracted_text))
+    index = None
+    batch_size = 32
 
-    if not all_chunks:
+    for file_path, file_type in file_paths_with_types:
+        try:
+            extracted_text = extract_text_from_file(file_path, file_type)
+            file_chunks = chunk_text(extracted_text)
+            if not file_chunks:
+                continue
+
+            for i in range(0, len(file_chunks), batch_size):
+                batch = file_chunks[i : i + batch_size]
+                embeddings = _get_model().encode(batch, convert_to_numpy=True)
+                normalized_embeddings = np.asarray(embeddings, dtype=np.float32)
+
+                if index is None:
+                    index = faiss.IndexFlatL2(normalized_embeddings.shape[1])
+                
+                index.add(normalized_embeddings)
+            
+            all_chunks.extend(file_chunks)
+            # Clear large text from memory
+            del extracted_text
+        except Exception as exc:
+            logger.error(f"Failed to process file {file_path}: {exc}")
+            continue
+
+    if not all_chunks or index is None:
         logger.info(
             "No chunks extracted for indexing.",
             extra={
@@ -124,12 +147,6 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
             },
         )
         return None
-
-    embeddings = _get_model().encode(all_chunks, convert_to_numpy=True)
-    normalized_embeddings = np.asarray(embeddings, dtype=np.float32)
-
-    index = faiss.IndexFlatL2(normalized_embeddings.shape[1])
-    index.add(normalized_embeddings)
 
     os.makedirs(settings.VECTOR_DIR, exist_ok=True)
     index_path = get_index_path(study_id)
