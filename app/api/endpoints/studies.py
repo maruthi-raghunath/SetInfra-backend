@@ -44,7 +44,7 @@ def list_studies(page: int = 1, limit: int = 20, current_user: str = Depends(get
     safe_limit = max(1, min(limit, 100))
     offset = (safe_page - 1) * safe_limit
 
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     total_items = con.execute(
         "SELECT COUNT(*) FROM studies WHERE user_id = ?",
         (current_user,),
@@ -82,7 +82,7 @@ def list_studies(page: int = 1, limit: int = 20, current_user: str = Depends(get
 
 @router.delete("/{study_id}")
 def delete_study(study_id: str, current_user: str = Depends(get_current_user)):
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         owner = con.execute("SELECT user_id FROM studies WHERE id = ?", (study_id,)).fetchone()
     finally:

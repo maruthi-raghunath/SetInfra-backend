@@ -22,7 +22,7 @@ TOP_K = 1000
 
 
 def _rebuild_chunk_metadata(study_id: str, chunks_path: Path) -> list[str]:
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         rows = con.execute(
             """

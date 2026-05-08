@@ -23,7 +23,7 @@ def get_original_tokens(study_id: str, db_path: str = settings.DB_PATH) -> int:
         return ORIGINAL_TOKENS_CACHE[study_id]
         
     try:
-        con = duckdb.connect(db_path, read_only=True)
+        con = duckdb.connect(db_path)
         # First, try to load from DB
         row = con.execute("SELECT original_tokens FROM studies WHERE id = ?", (study_id,)).fetchone()
         if row and row[0] is not None:
@@ -57,7 +57,7 @@ def get_original_tokens(study_id: str, db_path: str = settings.DB_PATH) -> int:
 def _extract_valid_values_from_schema(study_id: str, db_path: str) -> dict[str, dict[str, str]]:
     try:
         from openpyxl import load_workbook
-        con = duckdb.connect(db_path, read_only=True)
+        con = duckdb.connect(db_path)
         schema_file = con.execute(
             "SELECT storage_path FROM files WHERE file_type = 'Schema_JSON' AND study_id = ? ORDER BY created_at DESC",
             (study_id,)

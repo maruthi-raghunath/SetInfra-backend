@@ -48,7 +48,7 @@ def execute_query(sql: str) -> QueryExecutionResult:
         result = [dict(zip(column_names, row)) for row in fetched_rows]
         return QueryExecutionResult(rows=result, duckdb_exec_ms=duckdb_exec_ms, sql=bounded_sql)
 
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         cursor = con.execute(bounded_sql)
         column_names = [description[0] for description in cursor.description]

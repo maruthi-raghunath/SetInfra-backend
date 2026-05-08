@@ -50,7 +50,7 @@ def validate_sql(sql: str, study_id: str) -> bool:
             "Security Guardrail Tripped: Requested operation involves an invalid mutation command."
         )
 
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         active_tables = set(list_study_tables(con, study_id))
     finally:

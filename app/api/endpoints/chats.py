@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 def _assert_chat_access(chat_id: str, current_user: str) -> tuple[str, str]:
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         row = con.execute(
             """
@@ -41,7 +41,7 @@ def list_chats(
     safe_limit = max(1, min(limit, 100))
     offset = (safe_page - 1) * safe_limit
 
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         owner = con.execute("SELECT user_id FROM studies WHERE id = ?", (study_id,)).fetchone()
         if owner is None:
@@ -88,7 +88,7 @@ def list_chats(
 def get_chat_messages(chat_id: str, current_user: str = Depends(get_current_user)):
     """Return all messages for a chat in chronological order."""
     _assert_chat_access(chat_id, current_user)
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         rows = con.execute(
             """

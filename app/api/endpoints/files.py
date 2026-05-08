@@ -262,7 +262,7 @@ def delete_file(file_id: str, current_user: str = Depends(get_current_user)):
     if storage_path and os.path.exists(storage_path):
         os.remove(storage_path)
 
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     remaining_tables = list_study_tables(con, study_id)
     con.close()
 

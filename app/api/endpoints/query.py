@@ -21,7 +21,7 @@ class QueryRequest(BaseModel):
 
 
 def _ensure_study_access(study_id: str, current_user: str) -> None:
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         owner = con.execute("SELECT user_id FROM studies WHERE id = ?", (study_id,)).fetchone()
     finally:
@@ -34,7 +34,7 @@ def _ensure_study_access(study_id: str, current_user: str) -> None:
 
 
 def _ensure_chat_access(chat_id: str, study_id: str) -> None:
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         chat_row = con.execute(
             "SELECT id FROM chats WHERE id = ? AND study_id = ?",

@@ -43,7 +43,7 @@ def register_user(payload: UserRegister):
 
 @router.post("/login")
 def login_user(payload: UserLogin):
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         user = con.execute("SELECT id, password_hash, username FROM users WHERE username = ?", (payload.username,)).fetchone()
         if not user or not verify_password(payload.password, user[1]):
@@ -61,7 +61,7 @@ def login_user(payload: UserLogin):
 
 @router.get("/check-username")
 def check_username(username: str):
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         existing = con.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
         return {"is_unique": existing is None}
@@ -73,7 +73,7 @@ from fastapi import Depends
 
 @router.get("/users")
 def get_users(current_user: str = Depends(get_current_user)):
-    con = duckdb.connect(settings.DB_PATH, read_only=True)
+    con = duckdb.connect(settings.DB_PATH)
     try:
         current_username = con.execute("SELECT username FROM users WHERE id = ?", (current_user,)).fetchone()
         if not current_username or current_username[0] != "Admin":
