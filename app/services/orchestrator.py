@@ -50,7 +50,7 @@ def _save_chat_and_audit(
                 str(uuid.uuid4()),
                 chat_id,
                 assistant_message,
-                json.dumps(metrics),
+                json.dumps(metrics, default=str),
             ),
         )
         con.execute(
@@ -118,7 +118,11 @@ async def run_query(study_id: str, chat_id: str, prompt: str, user_id: str, user
         metrics["stats_skipped"] = stats_result["skipped"]
         metrics["row_count"] = stats_result["row_count"]
 
-        if stats_result["skipped"]:
+        # If data is insufficient but it's a Protocol question (SQL is empty or "NONE"), 
+        # we MUST still explain using RAG context.
+        force_explanation = (not executed_sql) or (executed_sql.strip().upper() == "NONE")
+
+        if stats_result["skipped"] and not force_explanation:
             assistant_text = stats_result["reason"]
             assistant_chunks.append(assistant_text)
             yield _event("explanation", {"chunk": assistant_text, "chat_id": chat_id})
@@ -136,9 +140,24 @@ async def run_query(study_id: str, chat_id: str, prompt: str, user_id: str, user
         if not assistant_message:
             assistant_message = "No explanation generated."
 
+        from app.core.compression import get_original_tokens
+        original_tokens = get_original_tokens(study_id, settings.DB_PATH)
+        actual_tokens = plan_result.prompt_tokens_estimate
+        savings_percentage = 0.0
+        if original_tokens > 0:
+            savings_percentage = round(((original_tokens - actual_tokens) / original_tokens) * 100, 2)
+            
+        metrics["compression_stats"] = {
+            "original_tokens": original_tokens,
+            "actual_tokens": actual_tokens,
+            "savings_percentage": savings_percentage
+        }
+
         metrics["total_latency_ms"] = int((time.perf_counter() - total_start) * 1000)
         print(f"[TIMING] total_processing_time: {metrics['total_latency_ms']}ms")
         metrics["chart_type"] = plan_result.plan["chart_type"]
+        metrics["data_rows"] = execution_result.rows
+        metrics["sql_query"] = executed_sql
         metrics["audit_log"] = {
             "prompt_id": trace_id,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

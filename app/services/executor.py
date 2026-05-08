@@ -33,6 +33,9 @@ def _enforce_limit(sql: str) -> str:
 
 
 def execute_query(sql: str) -> QueryExecutionResult:
+    if sql.strip().upper() == "NONE":
+        return QueryExecutionResult(rows=[], duckdb_exec_ms=0, sql=sql)
+
     bounded_sql = _enforce_limit(sql)
     start = time.perf_counter()
     

@@ -1,4 +1,6 @@
+from __future__ import annotations
 import csv
+
 import json
 import logging
 import os
@@ -8,7 +10,7 @@ import numpy as np
 import PyPDF2
 from docx import Document
 from openpyxl import load_workbook
-# from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer
 import xlrd
 
 from app.core.config import settings
@@ -92,7 +94,7 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
     return ""
 
 
-def chunk_text(text: str, chunk_size: int = 512, overlap: int = 50) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 200, overlap: int = 30) -> list[str]:
     words = text.split()
     if not words:
         return []

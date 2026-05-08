@@ -19,6 +19,18 @@ TABLE_REFERENCE_PATTERN = re.compile(
 )
 
 
+def _normalize_sql(sql: str) -> str:
+    # 1. Strip multi-line comments /* ... */
+    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
+    # 2. Strip single-line comments -- ...
+    sql = re.sub(r"--.*?(?:\n|$)", " ", sql)
+    # 3. Uppercase everything
+    sql = sql.upper()
+    # 4. Collapse all whitespace to single space
+    sql = re.sub(r"\s+", " ", sql).strip()
+    return sql
+
+
 def _extract_table_references(sql: str) -> set[str]:
     references: set[str] = set()
     for match in TABLE_REFERENCE_PATTERN.findall(sql):
@@ -28,7 +40,12 @@ def _extract_table_references(sql: str) -> set[str]:
 
 
 def validate_sql(sql: str, study_id: str) -> bool:
-    if MUTATION_PATTERN.search(sql):
+    normalized_sql = _normalize_sql(sql)
+
+    if normalized_sql == "NONE":
+        return True
+
+    if MUTATION_PATTERN.search(normalized_sql):
         raise SQLGuardrailError(
             "Security Guardrail Tripped: Requested operation involves an invalid mutation command."
         )

@@ -55,6 +55,8 @@ def init_db() -> None:
         )
         """
     )
+    con.execute("ALTER TABLE studies ADD COLUMN IF NOT EXISTS compressed_schema JSON")
+    con.execute("ALTER TABLE studies ADD COLUMN IF NOT EXISTS original_tokens INTEGER")
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS files (

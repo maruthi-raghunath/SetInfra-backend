@@ -154,18 +154,19 @@ def process_study_files(study_id: str, current_user: str = Depends(get_current_u
     try:
         _assert_study_access(con, study_id, current_user)
 
-        files = con.execute(
+        # Get ALL files for this study to ensure complete indexing/schema
+        all_files = con.execute(
             """
-            SELECT id, file_type, storage_path, file_name
+            SELECT id, file_type, storage_path, file_name, is_processed
             FROM files
-            WHERE study_id = ? AND is_processed = false
+            WHERE study_id = ?
             ORDER BY created_at ASC
             """,
             (study_id,)
         ).fetchall()
 
-        if not files:
-            return {"status": "Processed", "tables_created": []}
+        if not all_files:
+            return {"status": "No files found", "tables_created": []}
 
         con.execute("UPDATE studies SET status = 'Processing' WHERE id = ?", (study_id,))
 
@@ -173,11 +174,13 @@ def process_study_files(study_id: str, current_user: str = Depends(get_current_u
         tables_created = []
         processed_file_ids: list[str] = []
 
-        for file_id, file_type, storage_path, file_name in files:
+        for file_id, file_type, storage_path, file_name, is_processed in all_files:
+            # Always collect documents for the full index
             if file_type in ["Protocol", "Schema_JSON"]:
                 documents_to_embed.append((storage_path, file_type))
 
-            elif file_type == "SDTM_CSV":
+            # Only process new SDTM files into DuckDB tables
+            if not is_processed and file_type == "SDTM_CSV":
                 domain = Path(file_name).stem.lower()
                 table_name = build_sdtm_table_name(study_id, domain)
                 safe_path = storage_path.replace("\\", "/").replace("'", "''")
@@ -186,33 +189,39 @@ def process_study_files(study_id: str, current_user: str = Depends(get_current_u
                     f"CREATE TABLE {table_name} AS SELECT * FROM read_csv_auto('{safe_path}')"
                 )
                 tables_created.append(table_name)
+            
+            if not is_processed:
+                processed_file_ids.append(file_id)
 
-            processed_file_ids.append(file_id)
     finally:
         con.close()
 
+    # Rebuild the full vector index for this study
     index_documents(study_id, documents_to_embed)
-    if tables_created:
-        compress_schema(study_id, settings.DB_PATH, tables_created)
-    else:
-        clear_cached_schema(study_id)
-        compress_schema(study_id, settings.DB_PATH)
 
+    # Rebuild the compressed schema cache
+    # We pass None to creations to force list_study_tables to find ALL existing tables
+    compress_schema(study_id, settings.DB_PATH)
+
+    # Mark files as processed in a new connection
     con = duckdb.connect(settings.DB_PATH)
-    for file_id in processed_file_ids:
-        con.execute("UPDATE files SET is_processed = true WHERE id = ?", (file_id,))
-    con.execute("UPDATE studies SET status = 'Active' WHERE id = ?", (study_id,))
-    con.close()
+    try:
+        for file_id in processed_file_ids:
+            con.execute("UPDATE files SET is_processed = true WHERE id = ?", (file_id,))
+        con.execute("UPDATE studies SET status = 'Active' WHERE id = ?", (study_id,))
+    finally:
+        con.close()
 
     logger.info(
-        "Study files processed.",
+        "Study files processed/re-indexed.",
         extra={
             "event_action": "db_execution",
             "model_version": "none",
             "metadata": {
                 "study_id": study_id,
-                "tables_created": tables_created,
+                "new_tables": tables_created,
                 "documents_indexed": len(documents_to_embed),
+                "newly_processed_files": len(processed_file_ids),
             },
         },
     )

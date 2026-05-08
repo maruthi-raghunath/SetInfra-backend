@@ -4,20 +4,34 @@ Return JSON only with this exact shape:
 {{
   "target_tables": ["table_name"],
   "sql": "SELECT ...",
-  "chart_type": "bar"
+  "chart_type": "none"
 }}
 
 Rules:
-- Use only the compressed schema provided below.
-- Use the RAG context only to interpret clinical terms and mappings.
-- Never invent tables or columns that are not present in the compressed schema.
+- First, analyze if the user's question can be answered by the **Protocol document** (RAG context), the **Patient Data** (CSV schema), or **both**.
+- If the question is purely about study design, inclusion/exclusion criteria, or details found only in the Protocol (RAG context) and does NOT require data analysis, set "sql" to "NONE" and "chart_type" to "none".
+- Use the compressed schema provided below to identify relevant patient data tables. You MUST verify that a column exists in the EXACT table you are querying.
+- Use the RAG context to interpret clinical terms, domain acronyms, and mappings.
+- Never invent tables or columns. Do not hallucinate columns onto a table (e.g. adding MedDRA columns to an SAE table if they only exist in the AE table).
+- If you need columns from different tables, you MUST use a SQL JOIN on the subject ID (e.g. SUBJ or USUBJID).
 - Never emit mutation SQL. Forbidden: DROP, INSERT, UPDATE, DELETE, ALTER, TRUNCATE.
 - SQL must be a single SELECT statement.
-- Keep the result set practical for analytics review.
-- Prefer explicit table names over aliases when possible.
-- If the user asks for a broad result set, keep it bounded.
+- Keep the result set practical for analytics review (LIMIT 500 is applied automatically).
 - If the user explicitly names a chart type, always use it.
 - Use "table" ONLY when the user explicitly asks for a table or the data has many columns that are best shown as raw rows.
+
+- Dataset Anomaly: Event tables in this dataset (like r_sae, r_death, r_aevbb, etc.) contain padded empty rows for EVERY patient in the trial. To count ACTUAL events, you MUST always add a `WHERE RAW = 1` clause or filter by a specific event column being NOT NULL.
+- Dataset Architecture (SAEs): The `r_sae` table ONLY contains hospitalization/death flags, NOT the names of the adverse events. If the user asks for the names, descriptions, or details of Serious Adverse Events (SAEs), you MUST use the `r_aevbb` table and filter by `AESER = 'Y'`. Never hallucinate columns like `PT_NAME` or `AETERM` onto `r_sae`.
+
+Example of correct behavior when querying Serious Adverse Events:
+User: "What were the serious adverse events for patient 435?"
+Analysis: Event descriptions (PT_NAME) do not exist in `r_sae`. Must use `r_aevbb` where `AESER = 'Y'`.
+Output:
+{{
+  "target_tables": ["sdtm_..._r_aevbb"],
+  "sql": "SELECT COUNT(DISTINCT SUBJ) FROM sdtm_..._r_aevbb WHERE AESER = 'Y' AND (SOC_NAME LIKE '%CARDIAC%' OR PT_NAME LIKE '%CARDIAC%')",
+  "chart_type": "none"
+}}
 
 Allowed chart_type values and when to use them:
 - "bar"        → Comparisons, counts, event frequencies, group summaries. SQL: SELECT category, count.
@@ -35,8 +49,9 @@ Allowed chart_type values and when to use them:
 - "spider"     → Multi-axis profile comparison (radar chart). SQL: SELECT attribute_label, score.
 - "timeline"   → Subject-level event timelines across dates (Gantt-style). SQL: SELECT subject_id, date.
 - "table"      → Raw tabular output. SQL: SELECT any columns.
+- "none"       → Default value when no chart is requested or needed.
 
-IMPORTANT: Choose chart_type to match the user's explicit request or the most insightful visualisation of the data.
+IMPORTANT: Set `chart_type` to "none" by default. ONLY output a chart type (like "bar", "timeline", etc.) if the user explicitly asks for a plot, chart, graph, visualization, or to overlay data visually.
 
 Compressed schema:
 {compressed_schema}

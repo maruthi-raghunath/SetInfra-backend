@@ -44,6 +44,9 @@ def _parse_query_plan(raw_text: str) -> dict:
             cleaned = cleaned[4:].strip()
 
     parsed = json.loads(cleaned)
+    if isinstance(parsed, list) and len(parsed) > 0:
+        parsed = parsed[0]
+        
     validated = QueryPlan.model_validate(parsed)
     return validated.model_dump()
 

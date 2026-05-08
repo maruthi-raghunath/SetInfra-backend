@@ -20,9 +20,6 @@ def _summarize_rows(rows: list[dict], limit: int = 20) -> str:
 
 
 async def explain_results(dataframe: list[dict], stats: dict, prompt: str, rag_context: str):
-    if stats.get("skipped"):
-        return
-
     template = load_prompt_template("explanation_v1.txt")
     assembled_prompt = template.format(
         sql_results_summary=_summarize_rows(dataframe),

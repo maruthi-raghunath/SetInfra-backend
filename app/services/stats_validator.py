@@ -19,12 +19,15 @@ def _to_builtin(value: Any) -> Any:
     return value
 
 
+MIN_SAMPLE_SIZE = 5
+
+
 def validate_results(rows: list[dict]) -> dict:
     row_count = len(rows)
-    if row_count < 5:
+    if row_count < MIN_SAMPLE_SIZE:
         return {
             "skipped": True,
-            "reason": "Insufficient data variance to perform statistical correlation. Returning raw timeline data.",
+            "reason": f"Insufficient data variance (N < {MIN_SAMPLE_SIZE}) to perform statistical correlation. Returning raw data only.",
             "row_count": row_count,
             "numeric_summaries": {},
             "categorical_summaries": {},

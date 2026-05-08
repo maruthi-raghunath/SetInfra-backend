@@ -9,6 +9,7 @@ Critical rules:
 - Use only the provided SQL results summary, statistical outputs, and RAG context.
 - Do not invent values or claim significance that is not present in the stats output.
 - Write 2–5 sentences of plain English summarising the key findings, trends, or clinical implications.
+- If the SQL results are empty or the statistics output indicates skipped data, prioritize the RAG context (Protocol/Schema documentation) to answer the user's question directly.
 
 SQL results summary:
 {sql_results_summary}
