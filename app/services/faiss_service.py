@@ -1,9 +1,7 @@
-from __future__ import annotations
-import csv
-
 import json
 import logging
 import os
+import gc
 from typing import Any
 
 import faiss
@@ -12,30 +10,56 @@ import PyPDF2
 from docx import Document
 from openpyxl import load_workbook
 import xlrd
+from google import genai
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_model: Any = None
-CHUNKS_SUFFIX = ".chunks.json"
+# --- Configuration ---
+# Use settings.USE_LOCAL_EMBEDDING to toggle between local and remote embeddings.
 
+_local_model: Any = None
 
-def _get_model() -> Any:
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer("all-MiniLM-L6-v2")
+def _get_local_model() -> Any:
+    global _local_model
+    if _local_model is None:
+        from sentence_transformers import SentenceTransformer
+        _local_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _local_model
 
-def get_embedding_model() -> Any:
-    return _get_model()
+def _get_gemini_client():
+    return genai.Client(api_key=settings.GEMINI_API_KEY)
 
+def get_embeddings(texts: list[str]) -> np.ndarray:
+    """Wrapper that chooses between local and remote embeddings based on settings."""
+    if settings.USE_LOCAL_EMBEDDING:
+        logger.info(f"Computing local embeddings for {len(texts)} chunks...")
+        model = _get_local_model()
+        embeddings = model.encode(texts, convert_to_numpy=True)
+        return np.array(embeddings, dtype=np.float32)
+    else:
+        logger.info(f"Fetching remote Gemini embeddings for {len(texts)} chunks...")
+        try:
+            client = _get_gemini_client()
+            result = client.models.embed_content(
+                model="text-embedding-004",
+                contents=texts,
+                config={"task_type": "RETRIEVAL_DOCUMENT"}
+            )
+            vectors = [e.values for e in result.embeddings]
+            return np.array(vectors, dtype=np.float32)
+        except Exception as e:
+            logger.error(f"Gemini Remote Embedding failed: {e}")
+            raise
+
+# --- Helper functions ---
 
 def get_index_path(study_id: str) -> str:
     return os.path.join(settings.VECTOR_DIR, f"{study_id}.index")
 
-
 def get_chunks_path(study_id: str) -> str:
-    return os.path.join(settings.VECTOR_DIR, f"{study_id}{CHUNKS_SUFFIX}")
-
+    return os.path.join(settings.VECTOR_DIR, f"{study_id}.chunks.json")
 
 def extract_text_from_file(file_path: str, file_type: str) -> str:
     if file_type == "Protocol":
@@ -57,6 +81,7 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
 
     if file_type == "Schema_JSON":
         if file_path.lower().endswith(".csv"):
+            import csv
             with open(file_path, "r", encoding="utf-8", newline="") as file_handle:
                 reader = csv.reader(file_handle)
                 return "\n".join(",".join(cell for cell in row) for row in reader)
@@ -73,28 +98,12 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
             workbook.close()
             return "\n".join(sheet_text)
 
-        if file_path.lower().endswith(".xls"):
-            workbook = xlrd.open_workbook(file_path)
-            sheet_text: list[str] = []
-            for worksheet in workbook.sheets():
-                sheet_text.append(f"[Sheet: {worksheet.name}]")
-                for row_index in range(worksheet.nrows):
-                    values = [
-                        "" if cell_value is None else str(cell_value)
-                        for cell_value in worksheet.row_values(row_index)
-                    ]
-                    if any(values):
-                        sheet_text.append(",".join(values))
-            return "\n".join(sheet_text)
-
     return ""
 
-
-def chunk_text(text: str, chunk_size: int = 200, overlap: int = 30) -> list[str]:
+def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> list[str]:
     words = text.split()
     if not words:
         return []
-
     chunks: list[str] = []
     step = max(1, chunk_size - overlap)
     for start in range(0, len(words), step):
@@ -103,24 +112,19 @@ def chunk_text(text: str, chunk_size: int = 200, overlap: int = 30) -> list[str]
             chunks.append(chunk)
     return chunks
 
+# --- Core logic ---
 
 def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]]) -> str | None:
     all_chunks: list[str] = []
     index = None
-    batch_size = 32
-    import gc
-
-    model = _get_model()
+    batch_size = 50
 
     for file_path, file_type in file_paths_with_types:
         try:
-            logger.info(f"Processing {file_path} for indexing...")
             extracted_text = extract_text_from_file(file_path, file_type)
             if not extracted_text:
                 continue
-                
             file_chunks = chunk_text(extracted_text)
-            # Clear text immediately to save RAM
             del extracted_text
             gc.collect()
 
@@ -129,12 +133,10 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
 
             for i in range(0, len(file_chunks), batch_size):
                 batch = file_chunks[i : i + batch_size]
-                embeddings = model.encode(batch, convert_to_numpy=True)
-                normalized_embeddings = np.asarray(embeddings, dtype=np.float32)
+                normalized_embeddings = get_embeddings(batch)
 
                 if index is None:
                     index = faiss.IndexFlatL2(normalized_embeddings.shape[1])
-                
                 index.add(normalized_embeddings)
             
             all_chunks.extend(file_chunks)
@@ -144,31 +146,22 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
             continue
 
     if not all_chunks or index is None:
-        logger.info(
-            "No chunks extracted for indexing.",
-            extra={
-                "event_action": "rag_retrieval",
-                "model_version": "all-MiniLM-L6-v2",
-                "metadata": {"study_id": study_id, "chunks": 0},
-            },
-        )
-        del model
-        gc.collect()
         return None
 
     os.makedirs(settings.VECTOR_DIR, exist_ok=True)
     index_path = get_index_path(study_id)
     faiss.write_index(index, index_path)
+    
     chunks_path = get_chunks_path(study_id)
-    with open(chunks_path, "w", encoding="utf-8") as file_handle:
-        json.dump({"study_id": study_id, "chunks": all_chunks}, file_handle)
+    with open(chunks_path, "w", encoding="utf-8") as f:
+        json.dump({"study_id": study_id, "chunks": all_chunks}, f)
 
-    logger.info(f"Document index saved with {len(all_chunks)} chunks.")
-    
-    # Final cleanup
-    del model
-    del all_chunks
-    del index
-    gc.collect()
-    
+    if settings.USE_LOCAL_EMBEDDING:
+        # Clear model after heavy indexing to save RAM
+        global _local_model
+        del _local_model
+        _local_model = None
+        gc.collect()
+
+    logger.info(f"Index saved with {len(all_chunks)} chunks.")
     return index_path

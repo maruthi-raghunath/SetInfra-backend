@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     USE_DUCKDB: bool = True
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173,https://set-infra-frontend.vercel.app"
+    USE_LOCAL_EMBEDDING: bool = False
 
     class Config:
         env_file = ".env"

@@ -13,13 +13,13 @@ from app.services.faiss_service import (
     chunk_text,
     extract_text_from_file,
     get_chunks_path,
-    get_embedding_model,
+    get_embeddings,
     get_index_path,
 )
 
 logger = logging.getLogger(__name__)
 MAX_CONTEXT_TOKENS = 6000
-TOP_K = 1000
+TOP_K = 100
 
 
 def _rebuild_chunk_metadata(study_id: str, chunks_path: Path) -> list[str]:
@@ -49,7 +49,6 @@ def retrieve_context(study_id: str, query_text: str) -> str:
     index_path = Path(get_index_path(study_id))
     chunks_path = Path(get_chunks_path(study_id))
     if not index_path.exists():
-        logger.warning(f"RAG index not found for study {study_id}")
         return ""
 
     if chunks_path.exists():
@@ -62,49 +61,51 @@ def retrieve_context(study_id: str, query_text: str) -> str:
     if not chunks:
         return ""
 
-    index = faiss.read_index(str(index_path))
-    model = get_embedding_model()
-    query_embedding = model.encode([query_text], convert_to_numpy=True)
-    normalized_embedding = np.asarray(query_embedding, dtype=np.float32)
-    _, indices = index.search(normalized_embedding, min(TOP_K, len(chunks)))
+    try:
+        index = faiss.read_index(str(index_path))
+        # Use unified get_embeddings for query as well
+        normalized_embedding = get_embeddings([query_text])
+        _, indices = index.search(normalized_embedding, min(TOP_K, len(chunks)))
 
-    # Re-ranking heuristic for clinical opposites (Inclusion vs Exclusion)
-    query_lower = query_text.lower()
-    indices_list = list(indices[0])
-    
-    if "inclusion" in query_lower or "exclusion" in query_lower:
-        primary = "inclusion" if "inclusion" in query_lower else "exclusion"
-        secondary = "exclusion" if "inclusion" in query_lower else "inclusion"
+        # Re-ranking heuristic for clinical opposites (Inclusion vs Exclusion)
+        query_lower = query_text.lower()
+        indices_list = list(indices[0])
         
-        def rank_score(idx):
-            if idx < 0 or idx >= len(chunks): return -1
-            txt = chunks[idx].lower()
-            score = 0
-            if "inclusion criteria" in txt or "exclusion criteria" in txt: score += 5
-            if primary in txt and secondary not in txt: score += 3
-            elif primary in txt: score += 2
-            elif secondary in txt: score += 1
-            if "[sheet:" in txt: score -= 2
-            return score
+        if "inclusion" in query_lower or "exclusion" in query_lower:
+            primary = "inclusion" if "inclusion" in query_lower else "exclusion"
+            secondary = "exclusion" if "inclusion" in query_lower else "inclusion"
             
-        indices_list.sort(key=rank_score, reverse=True)
+            def rank_score(idx):
+                if idx < 0 or idx >= len(chunks): return -1
+                txt = chunks[idx].lower()
+                score = 0
+                if "inclusion criteria" in txt or "exclusion criteria" in txt: score += 5
+                if primary in txt and secondary not in txt: score += 3
+                elif primary in txt: score += 2
+                elif secondary in txt: score += 1
+                if "[sheet:" in txt: score -= 2
+                return score
+                
+            indices_list.sort(key=rank_score, reverse=True)
 
-    selected_chunks: list[str] = []
-    for chunk_index in indices_list:
-        if chunk_index < 0 or chunk_index >= len(chunks):
-            continue
-        candidate = chunks[chunk_index]
-        tentative = "\n\n".join(selected_chunks + [candidate])
-        if count_tokens(tentative) > MAX_CONTEXT_TOKENS:
-            break
-        selected_chunks.append(candidate)
+        selected_chunks: list[str] = []
+        for chunk_index in indices_list:
+            if chunk_index < 0 or chunk_index >= len(chunks):
+                continue
+            candidate = chunks[chunk_index]
+            tentative = "\n\n".join(selected_chunks + [candidate])
+            if count_tokens(tentative) > MAX_CONTEXT_TOKENS:
+                break
+            selected_chunks.append(candidate)
 
-    context = "\n\n".join(selected_chunks)
-    
-    # Cleanup to save RAM
-    del model
-    del index
-    del chunks
-    gc.collect()
-    
-    return context
+        context = "\n\n".join(selected_chunks)
+        
+        # Cleanup
+        del index
+        del chunks
+        gc.collect()
+        
+        return context
+    except Exception as e:
+        logger.error(f"RAG retrieval failed: {e}")
+        return ""
