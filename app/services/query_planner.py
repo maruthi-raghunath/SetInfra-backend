@@ -80,7 +80,6 @@ def plan_query(study_id: str, prompt: str, rag_context: str) -> QueryPlanResult:
             config={
                 "temperature": 0,
                 "response_mime_type": "application/json",
-                "thinking_config": {"thinking_level": "minimal"},
             },
         )
         last_raw_response = getattr(response, "text", "") or ""

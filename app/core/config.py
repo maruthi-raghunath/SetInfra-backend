@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
-    LLM_MODEL: str = "gemini-3.1-pro"
+    LLM_MODEL: str = "gemini-1.5-flash"
     JWT_SECRET: str = "setinfra-dev-secret"
     DB_PATH: str = "./data/db/setinfra.db"
     UPLOAD_DIR: str = "./data/uploads"

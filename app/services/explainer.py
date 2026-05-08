@@ -36,7 +36,6 @@ async def explain_results(dataframe: list[dict], stats: dict, prompt: str, rag_c
         contents=assembled_prompt,
         config={
             "temperature": 0,
-            "thinking_config": {"thinking_level": "minimal"},
         },
     )
     for chunk in stream:
