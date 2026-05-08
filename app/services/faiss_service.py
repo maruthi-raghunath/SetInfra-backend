@@ -4,24 +4,24 @@ import csv
 import json
 import logging
 import os
+from typing import Any
 
 import faiss
 import numpy as np
 import PyPDF2
 from docx import Document
 from openpyxl import load_workbook
-from sentence_transformers import SentenceTransformer
 import xlrd
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_model: SentenceTransformer | None = None
+_model: Any = None
 CHUNKS_SUFFIX = ".chunks.json"
 
 
-def _get_model() -> "SentenceTransformer":
+def _get_model() -> Any:
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
@@ -29,7 +29,7 @@ def _get_model() -> "SentenceTransformer":
     return _model
 
 
-def get_embedding_model() -> SentenceTransformer:
+def get_embedding_model() -> Any:
     return _get_model()
 
 
