@@ -1,13 +1,14 @@
 import json
 import logging
+import gc
 from pathlib import Path
 
-import duckdb
 import faiss
 import numpy as np
 
 from app.core.compression import count_tokens
 from app.core.config import settings
+from app.db.session import get_db
 from app.services.faiss_service import (
     chunk_text,
     extract_text_from_file,
@@ -22,19 +23,16 @@ TOP_K = 1000
 
 
 def _rebuild_chunk_metadata(study_id: str, chunks_path: Path) -> list[str]:
-    con = duckdb.connect(settings.DB_PATH)
-    try:
-        rows = con.execute(
-            """
-            SELECT storage_path, file_type
-            FROM files
-            WHERE study_id = ? AND file_type IN ('Protocol', 'Schema_JSON')
-            ORDER BY created_at ASC
-            """,
-            (study_id,),
-        ).fetchall()
-    finally:
-        con.close()
+    con = get_db()
+    rows = con.execute(
+        """
+        SELECT storage_path, file_type
+        FROM files
+        WHERE study_id = ? AND file_type IN ('Protocol', 'Schema_JSON')
+        ORDER BY created_at ASC
+        """,
+        (study_id,),
+    ).fetchall()
 
     rebuilt_chunks: list[str] = []
     for storage_path, file_type in rows:
@@ -51,17 +49,7 @@ def retrieve_context(study_id: str, query_text: str) -> str:
     index_path = Path(get_index_path(study_id))
     chunks_path = Path(get_chunks_path(study_id))
     if not index_path.exists():
-        logger.warning(
-            "RAG index not found; continuing without RAG context.",
-            extra={
-                "event_action": "rag_retrieval",
-                "model_version": "all-MiniLM-L6-v2",
-                "metadata": {
-                    "study_id": study_id,
-                    "index_exists": index_path.exists(),
-                },
-            },
-        )
+        logger.warning(f"RAG index not found for study {study_id}")
         return ""
 
     if chunks_path.exists():
@@ -72,21 +60,11 @@ def retrieve_context(study_id: str, query_text: str) -> str:
         chunks = _rebuild_chunk_metadata(study_id, chunks_path)
 
     if not chunks:
-        logger.warning(
-            "RAG chunk metadata unavailable; continuing without RAG context.",
-            extra={
-                "event_action": "rag_retrieval",
-                "model_version": "all-MiniLM-L6-v2",
-                "metadata": {
-                    "study_id": study_id,
-                    "chunks_path": str(chunks_path),
-                },
-            },
-        )
         return ""
 
     index = faiss.read_index(str(index_path))
-    query_embedding = get_embedding_model().encode([query_text], convert_to_numpy=True)
+    model = get_embedding_model()
+    query_embedding = model.encode([query_text], convert_to_numpy=True)
     normalized_embedding = np.asarray(query_embedding, dtype=np.float32)
     _, indices = index.search(normalized_embedding, min(TOP_K, len(chunks)))
 
@@ -106,10 +84,7 @@ def retrieve_context(study_id: str, query_text: str) -> str:
             if primary in txt and secondary not in txt: score += 3
             elif primary in txt: score += 2
             elif secondary in txt: score += 1
-            
-            # Slightly penalize Schema_JSON chunks so Protocol documents win ties
-            if "[sheet:" in txt:
-                score -= 2
+            if "[sheet:" in txt: score -= 2
             return score
             
         indices_list.sort(key=rank_score, reverse=True)
@@ -125,17 +100,11 @@ def retrieve_context(study_id: str, query_text: str) -> str:
         selected_chunks.append(candidate)
 
     context = "\n\n".join(selected_chunks)
-    logger.info(
-        "RAG context retrieved.",
-        extra={
-            "event_action": "rag_retrieval",
-            "model_version": "all-MiniLM-L6-v2",
-            "metadata": {
-                "study_id": study_id,
-                "requested_top_k": TOP_K,
-                "returned_chunks": len(selected_chunks),
-                "estimated_tokens": int(count_tokens(context)) if context else 0,
-            },
-        },
-    )
+    
+    # Cleanup to save RAM
+    del model
+    del index
+    del chunks
+    gc.collect()
+    
     return context

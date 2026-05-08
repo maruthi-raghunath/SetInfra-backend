@@ -89,6 +89,7 @@ def list_files(study_id: str, current_user: str = Depends(get_current_user)):
 def _internal_process_files(study_id: str):
     """Heavy lifting for file processing, run in a background task."""
     con = get_db()
+    logger.info(f"Starting background processing for study: {study_id}")
     try:
         # Get ALL files for this study to ensure complete indexing/schema
         all_files = con.execute(
@@ -102,9 +103,11 @@ def _internal_process_files(study_id: str):
         ).fetchall()
 
         if not all_files:
+            logger.info(f"No files found for study {study_id}")
             return
 
         con.execute("UPDATE studies SET status = 'Processing' WHERE id = ?", (study_id,))
+        logger.info(f"Set study {study_id} to Processing")
 
         documents_to_embed = []
         processed_file_ids: list[str] = []
@@ -114,6 +117,7 @@ def _internal_process_files(study_id: str):
                 documents_to_embed.append((storage_path, file_type))
 
             if not is_processed and file_type == "SDTM_CSV":
+                logger.info(f"Ingesting CSV: {file_name}")
                 domain = Path(file_name).stem.lower()
                 table_name = build_sdtm_table_name(study_id, domain)
                 safe_path = storage_path.replace("\\", "/").replace("'", "''")
@@ -124,13 +128,16 @@ def _internal_process_files(study_id: str):
                 processed_file_ids.append(file_id)
 
         if documents_to_embed:
+            logger.info(f"Indexing {len(documents_to_embed)} documents...")
             index_documents(study_id, documents_to_embed)
 
+        logger.info(f"Compressing schema for study {study_id}...")
         compress_schema(study_id, settings.DB_PATH)
 
         for f_id in processed_file_ids:
             con.execute("UPDATE files SET is_processed = true WHERE id = ?", (f_id,))
         con.execute("UPDATE studies SET status = 'Active' WHERE id = ?", (study_id,))
+        logger.info(f"Background processing complete for study {study_id}")
 
     except Exception as exc:
         logger.error(f"Background processing failed for study {study_id}: {exc}")

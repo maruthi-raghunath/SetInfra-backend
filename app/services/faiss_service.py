@@ -22,12 +22,8 @@ CHUNKS_SUFFIX = ".chunks.json"
 
 
 def _get_model() -> Any:
-    global _model
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer("all-MiniLM-L6-v2")
-    return _model
-
+    from sentence_transformers import SentenceTransformer
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
 def get_embedding_model() -> Any:
     return _get_model()
@@ -112,17 +108,28 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
     all_chunks: list[str] = []
     index = None
     batch_size = 32
+    import gc
+
+    model = _get_model()
 
     for file_path, file_type in file_paths_with_types:
         try:
+            logger.info(f"Processing {file_path} for indexing...")
             extracted_text = extract_text_from_file(file_path, file_type)
+            if not extracted_text:
+                continue
+                
             file_chunks = chunk_text(extracted_text)
+            # Clear text immediately to save RAM
+            del extracted_text
+            gc.collect()
+
             if not file_chunks:
                 continue
 
             for i in range(0, len(file_chunks), batch_size):
                 batch = file_chunks[i : i + batch_size]
-                embeddings = _get_model().encode(batch, convert_to_numpy=True)
+                embeddings = model.encode(batch, convert_to_numpy=True)
                 normalized_embeddings = np.asarray(embeddings, dtype=np.float32)
 
                 if index is None:
@@ -131,8 +138,7 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
                 index.add(normalized_embeddings)
             
             all_chunks.extend(file_chunks)
-            # Clear large text from memory
-            del extracted_text
+            gc.collect()
         except Exception as exc:
             logger.error(f"Failed to process file {file_path}: {exc}")
             continue
@@ -146,6 +152,8 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
                 "metadata": {"study_id": study_id, "chunks": 0},
             },
         )
+        del model
+        gc.collect()
         return None
 
     os.makedirs(settings.VECTOR_DIR, exist_ok=True)
@@ -155,17 +163,12 @@ def index_documents(study_id: str, file_paths_with_types: list[tuple[str, str]])
     with open(chunks_path, "w", encoding="utf-8") as file_handle:
         json.dump({"study_id": study_id, "chunks": all_chunks}, file_handle)
 
-    logger.info(
-        "Document index saved.",
-        extra={
-            "event_action": "rag_retrieval",
-            "model_version": "all-MiniLM-L6-v2",
-            "metadata": {
-                "study_id": study_id,
-                "chunks": len(all_chunks),
-                "index_path": index_path,
-                "chunks_path": chunks_path,
-            },
-        },
-    )
+    logger.info(f"Document index saved with {len(all_chunks)} chunks.")
+    
+    # Final cleanup
+    del model
+    del all_chunks
+    del index
+    gc.collect()
+    
     return index_path
