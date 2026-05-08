@@ -31,10 +31,16 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Setinfra API", lifespan=lifespan)
 
 # Add CORS Middleware with configurable origins
+import logging
+logger = logging.getLogger(__name__)
+
 origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
+logger.info(f"Configured CORS origins: {origins}")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
