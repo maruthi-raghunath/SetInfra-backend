@@ -23,6 +23,7 @@ ALLOWED_TYPES = {
 }
 
 def _assert_study_access(con, study_id: str, user_id: str):
+    study_id = study_id.strip()
     row = con.execute("SELECT user_id FROM studies WHERE id = ?", (study_id,)).fetchone()
     if not row:
         raise api_error(404, "NOT_FOUND", "Study not found.")
