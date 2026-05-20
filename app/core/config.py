@@ -1,4 +1,16 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_path(path_value: str) -> str:
+    path = Path(path_value)
+    if path.is_absolute():
+        return str(path)
+    return str((_BACKEND_ROOT / path).resolve())
 
 
 class Settings(BaseSettings):
@@ -16,6 +28,11 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+    def model_post_init(self, __context) -> None:
+        self.DB_PATH = _resolve_path(self.DB_PATH)
+        self.UPLOAD_DIR = _resolve_path(self.UPLOAD_DIR)
+        self.VECTOR_DIR = _resolve_path(self.VECTOR_DIR)
 
 settings = Settings()
 

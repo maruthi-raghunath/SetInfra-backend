@@ -10,14 +10,15 @@ logger = logging.getLogger(__name__)
 
 def _get_gemini_client():
     from google import genai
+    from app.core.config import settings
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
-def get_embeddings(texts: list[str]) -> Any:
-    """Wrapper that chooses between local and remote embeddings based on settings."""
+def get_embeddings(texts: list[str], force_local: bool = False) -> Any:
+    """Wrapper that chooses between local and remote embeddings based on settings or forced flag."""
     from app.core.config import settings
     import numpy as np
 
-    if settings.USE_LOCAL_EMBEDDING:
+    if settings.USE_LOCAL_EMBEDDING or force_local:
         logger.info(f"Computing local embeddings for {len(texts)} chunks...")
         from sentence_transformers import SentenceTransformer
         model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -38,8 +39,13 @@ def get_embeddings(texts: list[str]) -> Any:
             vectors = [e.values for e in result.embeddings]
             return np.array(vectors, dtype=np.float32)
         except Exception as e:
-            logger.error(f"Gemini Remote Embedding failed: {e}")
-            raise
+            logger.warning(f"Gemini Remote Embedding failed ({e}). Falling back to local embeddings...")
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer("all-MiniLM-L6-v2")
+            embeddings = model.encode(texts, convert_to_numpy=True)
+            del model
+            gc.collect()
+            return np.array(embeddings, dtype=np.float32)
 
 def get_index_path(study_id: str) -> str:
     from app.core.config import settings
@@ -74,6 +80,16 @@ def extract_text_from_file(file_path: str, file_type: str) -> str:
             )
 
     if file_type == "Schema_JSON":
+        if file_path.lower().endswith(".json"):
+            import json
+            try:
+                with open(file_path, "r", encoding="utf-8") as file_handle:
+                    data = json.load(file_handle)
+                    return json.dumps(data, indent=2)
+            except Exception as e:
+                logger.error(f"JSON extraction failed: {e}")
+                return ""
+
         if file_path.lower().endswith(".csv"):
             import csv
             with open(file_path, "r", encoding="utf-8", newline="") as file_handle:

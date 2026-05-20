@@ -19,14 +19,27 @@ from app.db.session import DatabaseSession
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging()
+    import logging
+    startup_logger = logging.getLogger(__name__)
     try:
         os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
         os.makedirs(settings.VECTOR_DIR, exist_ok=True)
         os.makedirs(os.path.dirname(settings.DB_PATH), exist_ok=True)
+        startup_logger.info(
+            "Resolved storage paths at startup.",
+            extra={
+                "event_action": "startup_paths",
+                "model_version": "none",
+                "metadata": {
+                    "db_path": settings.DB_PATH,
+                    "upload_dir": settings.UPLOAD_DIR,
+                    "vector_dir": settings.VECTOR_DIR,
+                },
+            },
+        )
         init_db()
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Startup error: {e}")
+        startup_logger.error(f"Startup error: {e}")
     
     yield
     

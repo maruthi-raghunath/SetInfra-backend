@@ -15,6 +15,5 @@ class DatabaseSession:
         return cls._con
 
 def get_db():
-    # Return the shared connection directly. 
-    # DuckDB connections are thread-safe for simple operations.
-    return DatabaseSession.get_connection()
+    # Return a new cursor from the shared connection for thread safety
+    return DatabaseSession.get_connection().cursor()

@@ -41,6 +41,20 @@ def retrieve_context(study_id: str, query_text: str) -> str:
     
     index_path = Path(get_index_path(study_id))
     chunks_path = Path(get_chunks_path(study_id))
+    logger.info(
+        "Resolving RAG artifacts.",
+        extra={
+            "event_action": "rag_artifacts",
+            "model_version": "none",
+            "metadata": {
+                "study_id": study_id,
+                "index_path": str(index_path),
+                "chunks_path": str(chunks_path),
+                "index_exists": index_path.exists(),
+                "chunks_exists": chunks_path.exists(),
+            },
+        },
+    )
     
     if not index_path.exists():
         logger.warning(f"RAG index not found for study {study_id} at {index_path}. It may have been wiped by a server restart.")
@@ -61,7 +75,8 @@ def retrieve_context(study_id: str, query_text: str) -> str:
         index = faiss.read_index(str(index_path))
         
         logger.info("Fetching embedding for query...")
-        normalized_embedding = get_embeddings([query_text])
+        force_local = getattr(index, "d", 0) == 384
+        normalized_embedding = get_embeddings([query_text], force_local=force_local)
         
         logger.info(f"Searching index for top {TOP_K} chunks...")
         _, indices = index.search(normalized_embedding, min(TOP_K, len(chunks)))
